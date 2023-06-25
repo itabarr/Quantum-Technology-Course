@@ -157,7 +157,7 @@ def relative_entropy(p, q):
     return np.sum(np.where(p != 0, p * np.log(p / q), 0))
 
 if __name__ == "__main__":
-    n = 6  # Change this to the number of qubits you want
+    n = 3  # Change this to the number of qubits you want
     
     initial_state = np.zeros(2**n)
     # t = np.linspace(0, 1, 2**n, endpoint=False)
@@ -192,6 +192,9 @@ if __name__ == "__main__":
     #qft_circuit.initialize(initial_state , range(n)) 
     qft_circuit.measure_all()
     
+    # draw the circuit
+    qft_circuit.draw(output='mpl')
+
     unmeasured_probabilities_vector = np.abs(unmeasured_states_vector)**2
     unified_probabilities = np.ones(2**n) / 2**n
     
