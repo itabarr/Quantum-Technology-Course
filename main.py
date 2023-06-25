@@ -46,7 +46,7 @@ def create_qft_circuit(n , initial_state = None):
     swap_registers(circuit, n)
     return circuit
 
-def simulate_circuit(circuit , shots , output_state_vector = None , plot = False):
+def simulate_circuit(circuit , shots , output_state_vector = None , plot = False , Title = None):
     """Simulates a quantum circuit with the Qiskit Aer qasm_simulator and returns the result."""
     # Get the Aer qasm_simulator
     simulator = Aer.get_backend('qasm_simulator')
@@ -78,6 +78,12 @@ def simulate_circuit(circuit , shots , output_state_vector = None , plot = False
         plt.title('Quantum Circuit Simulation Results')
         plt.xlabel('States')
         plt.ylabel('Counts')
+
+        #rotate the xticks
+        plt.xticks(rotation=90)
+
+        if Title is not None:
+            plt.title(Title)
         
         # for bar in bars:
         #     height = bar.get_height()
@@ -93,7 +99,7 @@ def simulate_circuit(circuit , shots , output_state_vector = None , plot = False
 
     return normalized_counts
 
-def state_vector_simulation(circuit , initial_state = None):
+def state_vector_simulation(circuit , initial_state = None , plot = False , Title = None):
 
     sim = Aer.get_backend("aer_simulator")
     state_vector_circuit = circuit.copy()
@@ -106,7 +112,8 @@ def state_vector_simulation(circuit , initial_state = None):
         if (initial_state.shape[0] != 2**state_vector_circuit.num_qubits):
             raise ValueError("The length of initial_state must equal 2**n_qubits.")
 
-        plot_state_vector(initial_state, title="Initial state vector")
+        if plot:
+            plot_state_vector(initial_state, title="Initial state vector")
     
     else:
         initial_state = np.zeros(2**state_vector_circuit.num_qubits)
@@ -118,7 +125,8 @@ def state_vector_simulation(circuit , initial_state = None):
     state_vector_circuit.save_statevector()
     states_vector = sim.run(state_vector_circuit).result().get_statevector()
 
-    plot_state_vector(states_vector, title="Output state vector")
+    if plot:
+        plot_state_vector(states_vector, title="Output state vector")
 
     # Create a list of state labels in binary
     num_qubits = int(np.log2(np.asarray(states_vector).shape[0]))
@@ -145,15 +153,38 @@ def plot_state_vector(state_vector, title=""):
     plt.xlabel('States')
     plt.ylabel('Probabilities')
 
+def relative_entropy(p, q):
+    return np.sum(np.where(p != 0, p * np.log(p / q), 0))
+
 if __name__ == "__main__":
-    n = 5  # Change this to the number of qubits you want
+    n = 6  # Change this to the number of qubits you want
     
     initial_state = np.zeros(2**n)
-    initial_state[0] = 0.5
-    initial_state[1] = 0.5
+    # t = np.linspace(0, 1, 2**n, endpoint=False)
+    # initial_state = np.cos(2 * np.pi * t) + np.cos(4 * np.pi * t)
+    # initial_state[2] = 3
+
+    initial_state[0] = 1
+    initial_state[1] = 1
+    initial_state[2] = 1
 
     #normalize the initial state
     initial_state = initial_state / np.linalg.norm(initial_state)
+
+    #calculate the fourier transform of the initial state
+    fft_initial_state = np.fft.fft(initial_state)
+    abs_fft_initial_state = np.abs(fft_initial_state)**2
+    normalized_abs_fft_initial_state = abs_fft_initial_state / np.sum(abs_fft_initial_state)
+    # plot the initial state and its fourier transform in the same figure, in 2 subplots, using stem plots
+
+    fig, axs = plt.subplots(2, 1, figsize=(8, 6))
+    axs[0].stem(initial_state)
+    axs[0].set_title('Initial State')
+    axs[1].stem(normalized_abs_fft_initial_state)
+    axs[1].set_title('Fourier Transform of Initial State')
+    axs[0].grid(True)
+    axs[1].grid(True)
+
 
     qft_circuit = create_qft_circuit(n , initial_state )
     states , unmeasured_states_vector  = state_vector_simulation(qft_circuit , initial_state )
@@ -161,39 +192,38 @@ if __name__ == "__main__":
     #qft_circuit.initialize(initial_state , range(n)) 
     qft_circuit.measure_all()
     
-
-    shots = 10000
-    measured_probabilities_vector = simulate_circuit(qft_circuit , shots, unmeasured_states_vector , plot = True)
     unmeasured_probabilities_vector = np.abs(unmeasured_states_vector)**2
-
-
-    # calculate the fidelity between the measured and unmeasured states
-    prob_diff = (measured_probabilities_vector - unmeasured_probabilities_vector)**2
-    total_error = np.sum(prob_diff)
-
-    print("Total Error: ", total_error)
+    unified_probabilities = np.ones(2**n) / 2**n
     
     # create expnonential range of shots
-    num_of_samples = 10
-    shots_range = np.linspace(1000, 100000, num_of_samples, dtype=int)
+    num_of_samples = 100
+    shots_range = np.linspace(100, 100000, num_of_samples, dtype=int)
     errors = []
 
     for i, shots in enumerate(shots_range):
+        if i == num_of_samples // 4:
+            measured_probabilities_vector = simulate_circuit(qft_circuit , shots, unmeasured_states_vector , plot=True , Title = f"Compared final state to ideal state, shots = {shots}")
+
         if i == num_of_samples - 1:
-            measured_probabilities_vector = simulate_circuit(qft_circuit , shots, unmeasured_states_vector , plot=True)
+            measured_probabilities_vector = simulate_circuit(qft_circuit , shots, unmeasured_states_vector , plot=True , Title = f"Compared final state to ideal state, shots = {shots}")
         
         else:
             measured_probabilities_vector = simulate_circuit(qft_circuit , shots, unmeasured_states_vector)
         prob_mse = np.sqrt(np.sum((measured_probabilities_vector - unmeasured_probabilities_vector)**2))
         
-        random_prob_diff = np.ones(len(prob_diff)) * (1/len(prob_diff))
-        random_mse = np.sqrt(np.sum((unmeasured_probabilities_vector - random_prob_diff)**2))
+        measured_relative_entropy = relative_entropy(measured_probabilities_vector, unmeasured_probabilities_vector)
+        uniform_relative_entropy = relative_entropy(unified_probabilities, unmeasured_probabilities_vector)
 
-        total_error = prob_mse / random_mse
+        total_error = np.log(measured_relative_entropy / uniform_relative_entropy)
         errors.append(total_error)
 
         
         print(f"i: {i} Shots: {shots} Total Error: {total_error}")
     plt.figure()
     plt.plot(shots_range , errors)
+    plt.grid(alpha=0.3)
+
+    plt.title("Relative Entropy Error vs. Number of Shots")
+    plt.xlabel("Number of Shots")
+    plt.ylabel("Log of Relative Entropy Error")
     plt.show()
