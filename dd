@@ -1,0 +1,303 @@
+from qiskit import QuantumCircuit
+from qiskit import Aer, execute
+from qiskit.visualization import plot_histogram
+from qiskit_aer.noise import NoiseModel , pauli_error
+from qiskit.circuit.library import QFT
+
+import numpy as np
+from math import pi
+import matplotlib.pyplot as plt
+
+def qft_rotations(circuit, n):
+    """Performs qft on the first n qubits in circuit (without swaps)"""
+    if n == 0:
+        return circuit
+    n -= 1
+    circuit.h(n)
+    for qubit in range(n):
+        circuit.cp(pi/2**(n-qubit), qubit, n)
+    # At the end of our function, we call the same function again on
+    # the next qubits (we reduced n by one earlier in the function)
+    qft_rotations(circuit, n)
+
+def swap_registers(circuit, n):
+    """Swapping the qubit registers for QFT operation."""
+    for qubit in range(n//2):
+        circuit.swap(qubit, n-qubit-1)
+    return circuit
+
+def qft_circuit(n , initial_state = None , add_bit_flip = False , bit_flip_prob = 0.05):
+    """Create a Quantum Fourier Transform circuit for n qubits."""
+    # Initialize a quantum circuit with n qubits
+    circuit = QuantumCircuit(n)
+
+    if initial_state is not None:
+        # normalize the initial state
+        initial_state = initial_state / np.linalg.norm(initial_state)
+
+        # Check that the length of initial_state is correct
+        if (initial_state.shape[0] != 2**n):
+            raise ValueError("The length of initial_state must equal 2**n_qubits.")
+
+        # Initialize the qubits
+        circuit.initialize(initial_state, range(n))
+
+    # Add bit flip
+    if add_bit_flip:
+        print(bit_flip_prob)
+        bit_flip_prob_gate = pauli_error([('X', bit_flip_prob), ('I', 1 - bit_flip_prob)])
+        circuit.append(bit_flip_prob_gate, [0])
+        
+
+    # Create the QFT rotations
+    qft_rotations(circuit, n)
+    # Swap the registers for QFT
+    swap_registers(circuit, n)
+    return circuit
+
+def inverse_qft_circuit(n):
+    qc = qft_circuit(n)
+    return qc.inverse()
+
+
+def simulate_circuit(circuit , shots , output_state_vector = None , plot = False , Title = None):
+    """Simulates a quantum circuit with the Qiskit Aer qasm_simulator and returns the result."""
+    # Get the Aer qasm_simulator
+    simulator = Aer.get_backend('qasm_simulator')
+    circ = circuit.copy()
+
+    # Simulate the circuit with the qasm_simulator
+    result = execute(circ, backend=simulator, shots=shots).result()
+
+    # Get the counts (results) from the result object
+    counts = result.get_counts(circ)
+
+    qbits_num = circuit.num_qubits
+
+    # create a list of all possible output states
+    states = [format(i, '0%sb' % qbits_num) for i in range(2**qbits_num)]
+
+    for state in states:
+        if state not in counts:
+            counts[state] = 0  
+    
+    all_counts = np.array([counts.get(state, 0) for state in states])
+    normalized_counts = all_counts / shots
+
+    # Create a bar plot
+
+    if plot:
+        plt.figure()
+        bars = plt.bar(states , normalized_counts)
+        plt.title('Quantum Circuit Simulation Results')
+        plt.xlabel('States')
+        plt.ylabel('Counts')
+
+        #rotate the xticks
+        plt.xticks(rotation=90)
+
+        if Title is not None:
+            plt.title(Title)
+        
+        # for bar in bars:
+        #     height = bar.get_height()
+        #     plt.text(bar.get_x() + bar.get_width() / 2, height, str(height), 
+        #             ha='center', va='bottom')
+
+    
+    if output_state_vector is not None:
+        probabilities = np.abs(output_state_vector)**2
+
+        if plot:
+            plt.scatter(states, probabilities, color='red')
+
+    return normalized_counts
+
+def state_vector_simulation(circuit , initial_state = None , plot = False , Title = None):
+
+    sim = Aer.get_backend("aer_simulator")
+    state_vector_circuit = circuit.copy()
+
+    if initial_state is not None:
+        # normalize the initial state
+        initial_state = initial_state / np.linalg.norm(initial_state)
+
+        # Check that the length of initial_state is correct
+        if (initial_state.shape[0] != 2**state_vector_circuit.num_qubits):
+            raise ValueError("The length of initial_state must equal 2**n_qubits.")
+
+        if plot:
+            plot_state_vector(initial_state, title="Initial state vector")
+    
+    else:
+        initial_state = np.zeros(2**state_vector_circuit.num_qubits)
+        initial_state[0] = 1
+
+        plot_state_vector(initial_state, title="Initial state vector")
+
+    
+    state_vector_circuit.save_statevector()
+    states_vector = sim.run(state_vector_circuit).result().get_statevector()
+
+    if plot:
+        plot_state_vector(states_vector, title="Output state vector")
+
+    # Create a list of state labels in binary
+    num_qubits = int(np.log2(np.asarray(states_vector).shape[0]))
+    labels = [format(i, '0' + str(num_qubits) + 'b') for i in range(2**num_qubits)]
+    states = np.asarray(labels)
+
+    states_vector = np.asarray(states_vector)
+
+    return states , states_vector
+
+def plot_state_vector(state_vector, title=""):
+    # Calculate the probabilities from the state vector
+    probabilities = np.abs(state_vector)**2
+
+    # Create a list of state labels in binary
+    num_qubits = int(np.log2(np.asarray(state_vector).shape[0]))
+    labels = [format(i, '0' + str(num_qubits) + 'b') for i in range(2**num_qubits)]
+    
+    # Create a bar plot
+    # new figure
+    plt.figure()
+    plt.bar(labels, probabilities)
+    plt.title(title)
+    plt.xlabel('States')
+    plt.ylabel('Probabilities')
+
+def relative_entropy(p, q):
+    return np.sum(np.where(p != 0, p * np.log(p / q), 0))
+
+def draw_circuit(name , qbits_num = 3, scale = 0.5 , fold = 20):
+    if name == 'qft':
+        qc = qft_circuit(qbits_num)
+    
+    elif name == 'iqft':
+        qc = inverse_qft_circuit(qbits_num)
+    
+    elif name == 'qft_iqft':
+        qc = qft_circuit(qbits_num)
+        qc.barrier()
+        qc = qc.compose(inverse_qft_circuit(qbits_num))
+
+    qc.measure_all()
+    qc.draw(output='mpl', scale = scale , fold = fold)
+
+def create_initial_state(name , qbits_num):
+    if name == "zero":
+        initial_state = None
+    
+    elif name == "cos":
+        t = np.linspace(0, 1, 2**qbits_num, endpoint=False)
+        initial_state = np.cos(2 * np.pi * t)
+
+    elif name == "cos2":
+        t = np.linspace(0, 1, 2**qbits_num, endpoint=False)
+        initial_state = np.cos(2 * np.pi * t) + np.cos(8 * np.pi * t)
+        
+    elif name == "sin":
+        t = np.linspace(0, 1, 2**qbits_num, endpoint=False)
+        initial_state = np.sin(2 * np.pi * t)
+
+    elif name == "square":
+        t = np.linspace(0, 1, 2**qbits_num, endpoint=False)
+        initial_state = np.zeros(2**qbits_num)
+        # half of the states are 1 and the other half are 0
+        initial_state[2**qbits_num // 2:] = 1
+    
+    if initial_state is not None:
+        # normalize the initial state
+        initial_state = initial_state / np.linalg.norm(initial_state)
+    
+    return initial_state
+
+def custom_fft(initial_state , qbits_num):
+    
+    try:
+        if initial_state == None:
+            initial_state = np.zeros(2**qbits_num)
+            initial_state[0] = 1
+    
+    except:
+        pass
+
+    fft_initial_state = np.fft.fft(initial_state)
+    abs_fft_initial_state = np.abs(fft_initial_state)**2
+    normalized_abs_fft_initial_state = abs_fft_initial_state / np.sum(abs_fft_initial_state)
+
+    return normalized_abs_fft_initial_state
+
+def plot_fft(initial_state , fft_initial_state):
+    fig, axs = plt.subplots(2, 1, figsize=(8, 6))
+    axs[0].stem(initial_state)
+    axs[0].set_title('Initial State')
+    axs[1].stem(fft_initial_state)
+    axs[1].set_title('Absolute Square of Fourier Transform of Initial State')
+    axs[0].grid(True)
+    axs[1].grid(True)
+
+    return fig , axs
+
+def relative_entropy_simulation(initial_state = "cos", qbits_num = 4, num_of_samples = 50 , shots_range = [1000 , 1000000]):
+    
+    initial_state = create_initial_state(initial_state , qbits_num)
+
+    qc = qft_circuit(qbits_num , initial_state = initial_state)
+    shots_range = np.linspace(shots_range[0], shots_range[1], num_of_samples, dtype=int)
+    errors = np.zeros(num_of_samples)
+
+    unmeasured_states_vector = np.fft.fft(initial_state)
+    unmeasured_probabilities_vector = np.abs(unmeasured_states_vector)**2
+    unified_probabilities = np.ones(2**qbits_num) / 2**qbits_num
+
+    for i, shots in enumerate(shots_range):
+        if i == num_of_samples // 4:
+            measured_probabilities_vector = simulate_circuit(qc , shots, unmeasured_states_vector , plot=True , Title = f"Compared final state to ideal state, shots = {shots}")
+
+        if i == num_of_samples - 1:
+            measured_probabilities_vector = simulate_circuit(qc , shots, unmeasured_states_vector , plot=True , Title = f"Compared final state to ideal state, shots = {shots}")
+        
+        else:
+            measured_probabilities_vector = simulate_circuit(qc , shots, unmeasured_states_vector)
+        prob_mse = np.sqrt(np.sum((measured_probabilities_vector - unmeasured_probabilities_vector)**2))
+        
+        measured_relative_entropy = relative_entropy(measured_probabilities_vector, unmeasured_probabilities_vector)
+        uniform_relative_entropy = relative_entropy(unified_probabilities, unmeasured_probabilities_vector)
+
+        print(f"uniform_relative_entropy: {uniform_relative_entropy} measured_relative_entropy: {measured_relative_entropy}")
+        total_error = np.log(measured_relative_entropy / uniform_relative_entropy)
+        errors.append(total_error)
+
+        
+        print(f"i: {i} Shots: {shots} Total Error: {total_error}")
+
+    plt.figure()
+    plt.plot(shots_range , errors)
+    plt.grid(alpha=0.3)
+
+    plt.title("Relative Entropy Error vs. Number of Shots")
+    plt.xlabel("Number of Shots")
+    plt.ylabel("Log of Relative Entropy Error")
+
+if __name__ == "__main__":
+    qbits_num = 5  # Change this to the number of qubits you want
+
+    #draw all the circuits
+    #draw_circuit('qft' , qbits_num , scale = 0.7 , fold = 100)
+    # draw_circuit('iqft' , qbits_num)
+    # draw_circuit('qft_iqft' , qbits_num)
+
+    # initial_state = create_initial_state("cos2" , qbits_num)
+    # fft_initial_state = custom_fft(initial_state , qbits_num)
+
+    #plot_fft(initial_state , fft_initial_state)
+    
+
+    relative_entropy_simulation(initial_state = "cos" , qbits_num = qbits_num , num_of_samples = 50 , shots_range = [1000 , 1000000])
+    
+    
+    
+    
+    plt.show()

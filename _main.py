@@ -17,7 +17,7 @@ noise_meas = NoiseModel()
 noise_meas.add_all_qubit_quantum_error(error_meas, "measure")
 
 # Create Quantum Fourier Transform circuit with qbits_num qubits
-def create_QFT_circuit(qbits_num = 3):
+def qft_circuit(qbits_num = 3):
     
     # Create the circuit
     circuit = QuantumCircuit(3,0)
@@ -100,7 +100,7 @@ if __name__ == "__main__":
     
 
     # create quantum fourier transform circuit
-    circuit = create_QFT_circuit(qbits_num = 3)
+    circuit = qft_circuit(qbits_num = 3)
 
     # excecute the circuit
     excecute_circuit(circuit)
