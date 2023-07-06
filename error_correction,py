@@ -1,0 +1,42 @@
+from qiskit import QuantumRegister
+from qiskit import QuantumRegister, ClassicalRegister
+from qiskit import QuantumCircuit, execute,IBMQ
+from qiskit.tools.monitor import job_monitor
+import matplotlib.pyplot as plt
+
+print('\nBit Flip Code')
+print('----------------')
+
+# IBMQ.enable_account('ENTER API KEY HERE')
+# provider = IBMQ.get_provider(hub='ibm-q')
+
+# backend = provider.get_backend('ibmq_qasm_simulator')
+
+qbits_num = 5
+q = QuantumRegister(qbits_num,'x')
+encod = QuantumRegister(2,'z')
+c = ClassicalRegister(1,'c')
+
+circuit = QuantumCircuit(q[0] , encod , q[1:],c)
+
+circuit.cx(q[0],q[1])
+circuit.cx(q[0],q[2])
+circuit.x(q[0]) #Add this to simulate a bit flip error
+circuit.cx(q[0],q[1])
+circuit.cx(q[0],q[2])
+circuit.ccx(q[2],q[1],q[0])
+circuit.measure(q[0],c[0])
+
+
+circuit.draw(output='mpl')
+
+#job = execute(circuit, backend, shots=1000)
+
+#job_monitor(job)
+
+#counts = job.result().get_counts()
+
+print("\nBit flip code with error")
+print("----------------------")
+
+plt.show()
