@@ -1,7 +1,3 @@
-from qiskit import QuantumCircuit
-from qiskit.circuit import Gate
-from qiskit.transpiler import PassManager
-from qiskit.transpiler.passes import Unroller
 import itertools
 import numpy as np
 
@@ -36,7 +32,6 @@ def filter_bit_histogram(counts, bit_indices):
 
     return filtered_counts
 
-
 def print_eigenvalues_and_eigenstates(matrix):
     # Check if the matrix is square
     if matrix.shape[0] != matrix.shape[1]:
@@ -52,6 +47,30 @@ def print_eigenvalues_and_eigenstates(matrix):
         print("Eigenvector:", eigenvectors[:, i])
         print()
 
-# Test the function with a sample matrix
-matrix = np.array([[1, 0], [0, 2]])
-print_eigenvalues_and_eigenstates(matrix)
+def norm_state(initial_state):
+    return initial_state / np.linalg.norm(initial_state)
+
+def counts_to_arrays(counts, num_qubits):
+    states = [format(i, '0{}b'.format(num_qubits)) for i in range(2**num_qubits)]
+    num_counts = np.zeros(2**num_qubits, dtype=int)
+    for state, count in counts.items():
+        index = int(state, 2) 
+        num_counts[index] = int(count)
+    return np.array(states), num_counts
+
+def binary_to_int(states):
+    return np.array([int(state, 2) for state in states])
+
+def relative_entropy(p, q):
+    sum = 0
+    for i in range(q.size):
+        if q[i] == 0 and p[i] != 0 :
+            return np.nan 
+        if  p[i] == 0:
+            continue
+        else:   
+            sum = sum + p[i] * np.log(p[i] / q[i])   
+    return sum
+
+def rsse(p , q):
+    return np.sqrt(np.sum((p - q)**2))

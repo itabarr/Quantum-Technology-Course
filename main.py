@@ -1,222 +1,80 @@
-from qiskit import QuantumCircuit
-from qiskit import Aer, execute
-from qiskit.visualization import plot_histogram
+from qiskit import QuantumCircuit , Aer, execute , QuantumRegister, ClassicalRegister 
 from qiskit_aer.noise import NoiseModel , pauli_error , depolarizing_error
-from qiskit.circuit.library import QFT
-from qiskit import QuantumRegister, ClassicalRegister 
-from qiskit.circuit import Gate
-
 import numpy as np
 from math import pi
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
-import time
-
-import multiprocessing as mp
-
-
 from utils import * 
 
-
 def qft_rotations(circuit, n):
-    """Performs qft on the first n qubits in circuit (without swaps)"""
     if n == 0:
         return circuit
     n -= 1
     circuit.h(n)
     for qubit in range(n):
         circuit.cp(pi/2**(n-qubit), qubit, n)
-    # At the end of our function, we call the same function again on
-    # the next qubits (we reduced n by one earlier in the function)
     qft_rotations(circuit, n)
 
 def swap_registers(circuit, n):
-    """Swapping the qubit registers for QFT operation."""
     for qubit in range(n//2):
         circuit.swap(qubit, n-qubit-1)
     return circuit
 
 def qft_circuit(n , initial_state = None , add_bit_flip = False , bit_flip_prob = 0.05 , general_noise = False , general_noise_prob = 0.1):
-    """Create a Quantum Fourier Transform circuit for n qubits."""
-    # Initialize a quantum circuit with n qubits
     circuit = QuantumCircuit(n)
 
+    # Initialize State
     if initial_state is not None:
-        # normalize the initial state
-        initial_state = initial_state / np.linalg.norm(initial_state)
-
-        # Check that the length of initial_state is correct
-        if (initial_state.shape[0] != 2**n):
-            raise ValueError("The length of initial_state must equal 2**n_qubits.")
-
-        # Initialize the qubits
+        initial_state = norm_state(initial_state)
         circuit.initialize(initial_state, range(n))
-
 
     # Add bit flip
     if add_bit_flip:
-        print(bit_flip_prob)
         bit_flip_prob_gate = pauli_error([('X', bit_flip_prob), ('I', 1 - bit_flip_prob)])
         circuit.append(bit_flip_prob_gate, [0])
         
-
-    # Create the QFT rotations
+    # Create the QFT 
     qft_rotations(circuit, n)
-    # Swap the registers for QFT
     swap_registers(circuit, n)
 
     if general_noise:
         noise_model = NoiseModel()
-        #error_gate1 = pauli_error([('X', general_noise_prob), ('I', 1 - general_noise_prob)])
-        error_gate1 = depolarizing_error(general_noise_prob, 1)
-        noise_model.add_all_qubit_quantum_error(error_gate1, ['h'])
+        error_gate = depolarizing_error(general_noise_prob, 1)
+        noise_model.add_all_qubit_quantum_error(error_gate, ['h'])
         return circuit , noise_model
 
-    return circuit
+    return circuit , None
 
-def inverse_qft_circuit(n):
-    qc = qft_circuit(n)
-    return qc.inverse()
-
-def simulate_circuit(circuit , shots , output_state_vector = None , plot = False , Title = None , noise_model = None):
-    """Simulates a quantum circuit with the Qiskit Aer qasm_simulator and returns the result."""
-    # Get the Aer qasm_simulator
+def simulate_circuit(circuit , shots , plot = False , Title = None , noise_model = None):
     simulator = Aer.get_backend('qasm_simulator')
-    circ = circuit.copy()
 
-    # Simulate the circuit with the qasm_simulator
-    if noise_model == None:
-        result = execute(circ, backend=simulator, shots=shots).result()
-    
+    if noise_model is None:
+        result = execute(circuit, backend=simulator, shots=shots).result()
     else:
-        result = execute(circ, backend=simulator, shots=shots , noise_model=noise_model).result()
+        result = execute(circuit, backend=simulator, shots=shots , noise_model=noise_model).result()
 
-    # Get the counts (results) from the result object
-    counts = result.get_counts(circ)
-
+    counts = result.get_counts(circuit)
     qbits_num = circuit.num_qubits
 
-    # create a list of all possible output states
-    states = [format(i, '0%sb' % qbits_num) for i in range(2**qbits_num)]
-
-    for state in states:
-        if state not in counts:
-            counts[state] = 0  
-    
-    all_counts = np.array([counts[state] for state in states])
-    normalized_counts = all_counts / shots
-
-    # Create a bar plot
+    states , counts = counts_to_arrays(counts, qbits_num)
+    counts = counts / shots
 
     if plot:
         plt.figure()
-        bars = plt.bar(states , normalized_counts)
+        plt.bar(states , counts)
         plt.title('Quantum Circuit Simulation Results')
         plt.xlabel('States')
         plt.ylabel('Counts')
-
-        #rotate the xticks
         plt.xticks(rotation=90)
 
         if Title is not None:
             plt.title(Title)
         
-        # for bar in bars:
-        #     height = bar.get_height()
-        #     plt.text(bar.get_x() + bar.get_width() / 2, height, str(height), 
-        #             ha='center', va='bottom')
+    return counts
 
-    
-    if output_state_vector is not None:
-        probabilities = np.abs(output_state_vector)**2
-
-        if plot:
-            plt.scatter(states, probabilities, color='red')
-
-    return normalized_counts
-
-def state_vector_simulation(circuit , initial_state = None , plot = False , Title = None):
-
-    sim = Aer.get_backend("aer_simulator")
-    state_vector_circuit = circuit.copy()
-
-    if initial_state is not None:
-        # normalize the initial state
-        initial_state = initial_state / np.linalg.norm(initial_state)
-
-        # Check that the length of initial_state is correct
-        if (initial_state.shape[0] != 2**state_vector_circuit.num_qubits):
-            raise ValueError("The length of initial_state must equal 2**n_qubits.")
-
-        if plot:
-            plot_state_vector(initial_state, title="Initial state vector")
-    
-    else:
-        initial_state = np.zeros(2**state_vector_circuit.num_qubits)
-        initial_state[0] = 1
-
-        plot_state_vector(initial_state, title="Initial state vector")
-
-    
-    state_vector_circuit.save_statevector()
-    states_vector = sim.run(state_vector_circuit).result().get_statevector()
-
-    if plot:
-        plot_state_vector(states_vector, title="Output state vector")
-
-    # Create a list of state labels in binary
-    num_qubits = int(np.log2(np.asarray(states_vector).shape[0]))
-    labels = [format(i, '0' + str(num_qubits) + 'b') for i in range(2**num_qubits)]
-    states = np.asarray(labels)
-
-    states_vector = np.asarray(states_vector)
-
-    return states , states_vector
-
-def plot_state_vector(state_vector, title=""):
-    # Calculate the probabilities from the state vector
-    probabilities = np.abs(state_vector)**2
-
-    # Create a list of state labels in binary
-    num_qubits = int(np.log2(np.asarray(state_vector).shape[0]))
-    labels = [format(i, '0' + str(num_qubits) + 'b') for i in range(2**num_qubits)]
-    
-    # Create a bar plot
-    # new figure
-    plt.figure()
-    plt.bar(labels, probabilities)
-    plt.title(title)
-    plt.xlabel('States')
-    plt.ylabel('Probabilities')
-
-def relative_entropy(p, q):
-    sum = 0
-    for i in range(q.size):
-
-        if q[i] == 0 and p[i] != 0 :
-            return np.nan 
-        
-        if  p[i] == 0:
-            continue
-        else:
-                
-            sum = sum + p[i] * np.log(p[i] / q[i])
-            
-    return sum
-    
-def draw_circuit(name , qbits_num = 3, scale = 0.5 , fold = 20):
-    if name == 'qft':
-        qc = qft_circuit(qbits_num)
-    
-    elif name == 'iqft':
-        qc = inverse_qft_circuit(qbits_num)
-    
-    elif name == 'qft_iqft':
-        qc = qft_circuit(qbits_num)
-        qc.barrier()
-        qc = qc.compose(inverse_qft_circuit(qbits_num))
-
+def draw_circuit(qbits_num = 3, scale = 0.5 , fold = 20):
+    qc, _= qft_circuit(qbits_num)
     qc.measure_all()
     qc.draw(output='mpl', scale = scale , fold = fold)
 
@@ -287,9 +145,8 @@ def custom_fft(initial_state , qbits_num):
 
 def plot_fft(initial_state , fft_initial_state):
     plt.rcParams.update({'font.size': 10})  # decrease font size
-
     fig, axs = plt.subplots(2, 1, figsize=(8, 6))
-
+    
     # Normalize initial state
     initial_state = np.abs(initial_state) ** 2 
     initial_state = initial_state / np.sum(initial_state)
@@ -297,7 +154,6 @@ def plot_fft(initial_state , fft_initial_state):
     axs[0].stem(initial_state)
     axs[0].set_title(r'$|f(x)|^2$', fontsize=12)   # Set the title in math format
     axs[0].grid(True)
-
     axs[1].stem(fft_initial_state)
     axs[1].set_title(r'$|DFT\{f(x)\}|^2}$', fontsize=12)  # Set the title in math format
     axs[1].grid(True)
@@ -313,153 +169,15 @@ def plot_all_fft(qbits_num, initial_states):
         fft_initial_state = custom_fft(initial_state, qbits_num)
         plot_fft(initial_state, fft_initial_state)
 
-def qft_accuracy_simulation(qbits_num = 3 , initial_state = "square"):
-    initial_state_name = initial_state
-
-    initial_state = create_initial_state(initial_state , qbits_num)
-    qc = qft_circuit(qbits_num , initial_state)
-    qc.measure_all()
-
-    unmeasured_states_vector = np.fft.fft(initial_state)
-    unmeasured_states_vector = unmeasured_states_vector / np.linalg.norm(unmeasured_states_vector)
-    unmeasured_probabilities_vector = np.abs(unmeasured_states_vector)**2
-    unified_probabilities = np.ones(2**n) / 2**n
-
-    # create expnonential range of shots
-    num_of_samples = 100
-    shots_range = np.linspace(1000, 100000, num_of_samples, dtype=int)
-    mse_error = []
-    relative_error = []
-
-    for i, shots in enumerate(shots_range):
-        if i == num_of_samples // 4:
-            measured_probabilities_vector = simulate_circuit(qc , shots, unmeasured_states_vector , plot=True , Title = f"Compared final state to ideal state, shots = {shots}")
-
-        if i == num_of_samples - 1:
-            measured_probabilities_vector = simulate_circuit(qc , shots, unmeasured_states_vector , plot=True , Title = f"Compared final state to ideal state, shots = {shots}")
-        
-        else:
-            measured_probabilities_vector = simulate_circuit(qc , shots, unmeasured_states_vector)
-        
-        uniform_prob_mse = np.sqrt(np.sum((unified_probabilities - unmeasured_probabilities_vector)**2))
-        prob_mse = np.sqrt(np.sum((measured_probabilities_vector - unmeasured_probabilities_vector)**2))
-        
-
-        #print(f"uniform_relative_entropy: {uniform_relative_entropy} measured_relative_entropy: {measured_relative_entropy}")
-        _mse_error = (prob_mse)
-        _relative_error = (prob_mse / uniform_prob_mse)
-        mse_error.append(_mse_error)
-        relative_error.append(_relative_error)
-        
-        print(f"shots: {shots} , mse_error: {_mse_error} , relative_error: {_relative_error}")
-    
-    
-
-
-
-    plt.figure()
-
-    #calculate moving average
-    window_size = 5
-    av_mse_error = np.convolve(mse_error, np.ones(window_size), 'valid') / window_size
-    av_relative_error = np.convolve(relative_error, np.ones(window_size), 'valid') / window_size
-
-
-    # plot 4 plots in one figure
-    fig, axs = plt.subplots(2, 1)
-
-    axs[0].plot(shots_range, mse_error)
-    # plot moving average
-    axs[0].plot(shots_range[window_size - 1:], av_mse_error)
-    axs[0].set_title(f'MSE for QFT of initial state {initial_state_name}')
-    axs[0].grid(alpha = 0.3)
-    axs[0].set_xlabel('Number of shots')
-    axs[0].set_ylabel('MSE')
-
-    axs[1].plot(shots_range, relative_error)
-    # plot moving average
-    axs[1].plot(shots_range[window_size - 1:], av_relative_error)
-    axs[1].set_title(f'Relative MSE for QFT of initial state {initial_state_name}')
-    axs[1].grid(alpha = 0.3)
-    axs[1].set_xlabel('Number of shots')
-    axs[1].set_ylabel('Relative MSE')
-
-    
-
-    # Add a title to the entire figure
-    fig.suptitle(f'Divergence of QFT to ideal DFT , qbits_num = {qbits_num} , initial_state = {initial_state_name}')
-
-    fig.subplots_adjust(hspace=0.5, wspace=0.4)
-
-def qft_accuracy_simulation_multiple_initial_states(qbits_num=3, initial_states=["square"], animate=False):
-    max_shots = 100000
-    d_shots = 10000
-    plt.figure()
-    for initial_state in initial_states:
-        initial_state_name = initial_state
-
-        initial_state = create_initial_state(initial_state, qbits_num)
-        qc = qft_circuit(qbits_num, initial_state)
-        qc.measure_all()
-
-        unmeasured_states_vector = np.fft.fft(initial_state)
-        unmeasured_probabilities_vector = np.abs(unmeasured_states_vector) ** 2
-        unmeasured_probabilities_vector = unmeasured_probabilities_vector / np.sum(
-            unmeasured_probabilities_vector
-        )
-
-        unified_probabilities = np.ones(2 ** qbits_num) / 2 ** qbits_num
-
-        shots_range = np.arange(d_shots, max_shots + d_shots, d_shots)
-
-        results = np.zeros((len(shots_range), 2 ** qbits_num))
-        histograms = np.zeros((len(shots_range), 2 ** qbits_num))
-        mse = np.zeros((len(shots_range), 1))
-
-        labels = [format(i, "0" + str(qbits_num) + "b") for i in range(2 ** qbits_num)]
-
-        for i, shots in enumerate(shots_range):
-            results[i] = simulate_circuit(qc, shots, unmeasured_states_vector)
-
-        for i in range(len(shots_range)):
-            if i == 0:
-                continue
-            histograms[i] = np.sum(results[0 : i + 1], axis=0) / (i + 1)
-            error_prob = np.sqrt(np.sum((histograms[i] - unmeasured_probabilities_vector)**2)) 
-            mse[i] = error_prob
-
-        shots_arr = shots_range[2:]
-        plt.plot(shots_arr, mse[2:], label=f"Initial State: {initial_state_name}")
-
-    plt.grid(alpha=0.3)
-    plt.title(f"QFT Accuracy Simulation - Qubits: {qbits_num}")
-    plt.xlabel("Number of Shots")
-    plt.ylabel("Squared Error-Sum")
-    plt.legend()
-    plt.xlim([shots_arr[0] , shots_arr[-1]])
-
-def qft_accuracy_simulation_2(qbits_num = 3 , initial_state="square" , animate = False):
+def qft_accuracy_simulation_animation(qbits_num = 3 , initial_state="square" , animate = False):
     n =qbits_num
     initial_state_name = initial_state
 
     initial_state = create_initial_state(initial_state , qbits_num)
-    qc = qft_circuit(qbits_num , initial_state )
+    qc, _= qft_circuit(qbits_num , initial_state)
     qc.measure_all()
 
-    
-    unmeasured_states_vector = np.fft.fft(initial_state)
-    unmeasured_probabilities_vector = np.abs(unmeasured_states_vector)**2 
-    unmeasured_probabilities_vector = unmeasured_probabilities_vector / np.sum(unmeasured_probabilities_vector)
-    
-    if initial_state_name == "cos":
-        unmeasured_probabilities_vector = arr = np.where(unmeasured_probabilities_vector < 10**-20, 0, unmeasured_probabilities_vector)
-
-        
-
-
-
-    print(unmeasured_probabilities_vector)
-    unified_probabilities = np.ones(2**n) / 2**n
+    unmeasured_probabilities_vector = custom_fft(initial_state , qbits_num)
 
     # create expnonential range of shots
     max_shots = 500000
@@ -475,21 +193,17 @@ def qft_accuracy_simulation_2(qbits_num = 3 , initial_state="square" , animate =
 
     labels = [format(i, '0' + str(n) + 'b') for i in range(2**n)]
     for i in range(shots_range):
-        results[i] = simulate_circuit(qc , d_shots, unmeasured_states_vector)
+        results[i] = simulate_circuit(qc , d_shots)
     
     for i in range(shots_range):
         if i == 0:
             continue
-        histograms[i] = np.sum(results[0:i] , axis = 0) / (i)
-        prob_mse = np.sqrt(np.sum((histograms[i] - unmeasured_probabilities_vector)**2))
-        mse[i] = prob_mse
 
-        
-        
-            
+        histograms[i] = np.sum(results[0:i] , axis = 0) / (i)
+        mse[i] = rsse(unmeasured_probabilities_vector , histograms[i])
         _relative_entropy[i] = relative_entropy(unmeasured_probabilities_vector, histograms[i])
-        
-    print(_relative_entropy)
+
+    # plot rsse
     plt.figure()
     shots_arr= np.arange(d_shots, max_shots + d_shots, d_shots)
     plt.plot(shots_arr[2:] , mse[2:])
@@ -498,7 +212,7 @@ def qft_accuracy_simulation_2(qbits_num = 3 , initial_state="square" , animate =
     plt.xlabel('Shots')
     plt.ylabel('RSSE')
     
-
+    # plot relative entropy
     plt.figure()
     plt.plot(shots_arr[2:] , _relative_entropy[2:])
     plt.title(f'Relative Entropy - Qubits: {qbits_num}, Initial State: {initial_state_name}')
@@ -506,6 +220,7 @@ def qft_accuracy_simulation_2(qbits_num = 3 , initial_state="square" , animate =
     plt.ylabel('Relative Entropy')
     plt.grid(alpha = 0.3)
 
+    # plot log relative entropy
     plt.figure()
     plt.plot(shots_arr[2:] , np.log(_relative_entropy[2:]))
     plt.title(f'Log Relative Entropy - Qubits: {qbits_num}, Initial State: {initial_state_name}')
@@ -513,17 +228,17 @@ def qft_accuracy_simulation_2(qbits_num = 3 , initial_state="square" , animate =
     plt.ylabel('Log Relative Entropy')
     plt.grid(alpha = 0.3)
 
-
+    # Create Animation
     if animate == True:
         fig = plt.figure()
         def update(curr):
-            print(curr)
+            print(f"iteration number {curr}.")
 
             if curr == 2 or curr == 11 or curr == 101:
                 print("Enter to continue:")
                 input()
-            if curr == shots_range -2:
-                print("closing")
+            if curr == 102:
+                print("Exiting")
                 plt.cla()
                 plt.close()
                 exit()
@@ -544,32 +259,6 @@ def qft_accuracy_simulation_2(qbits_num = 3 , initial_state="square" , animate =
         a = animation.FuncAnimation(fig, update, frames=shots_range-1 , interval = 10)
     
     plt.show(block=True)
-    # plt.figure()
-
-    # #calculate moving average
-    # window_size = 5
-    # av_mse_error = np.convolve(mse_error, np.ones(window_size), 'valid') / window_size
-    # av_relative_error = np.convolve(relative_error, np.ones(window_size), 'valid') / window_size
-
-
-    # # plot 4 plots in one figure
-    # fig, axs = plt.subplots(2, 1)
-
-    # axs[0].plot(shots_range, mse_error)
-    # # plot moving average
-    # axs[0].plot(shots_range[window_size - 1:], av_mse_error)
-    # axs[0].set_title(f'MSE for QFT of initial state {initial_state_name}')
-    # axs[0].grid(alpha = 0.3)
-    # axs[0].set_xlabel('Number of shots')
-    # axs[0].set_ylabel('MSE')
-
-    # axs[1].plot(shots_range, relative_error)
-    # # plot moving average
-    # axs[1].plot(shots_range[window_size - 1:], av_relative_error)
-    # axs[1].set_title(f'Relative MSE for QFT of initial state {initial_state_name}')
-    # axs[1].grid(alpha = 0.3)
-    # axs[1].set_xlabel('Number of shots')
-    # axs[1].set_ylabel('Relative MSE')
 
 def qft_accuracy_simulation_qbits():
     initial_states = ["square" , "cos2", "cos"]
@@ -607,32 +296,31 @@ def qft_accuracy_simulation_qbits():
     for i , initial_state in enumerate(initial_states):
         plt.plot(qbits_nums , relative_mse_error[i] , label = initial_state)
 
-def simulate_noise(qbits_num=5, shots=10000 , initial_state_name = "square" , plot = False):
+def simulate_bit_flip_noise(qbits_num=5, shots=1000 , initial_state_name = "square" , plot = False):
+    n = qbits_num
     labels = [format(i, '0' + str(n) + 'b') for i in range(2**n)]
     d_p = 0.05
     p_noise_arr = np.arange(0, 1 + d_p, d_p)
 
     # Simulate circuit without noise
     initial_state = create_initial_state(initial_state_name, qbits_num)
-    
     final_state = custom_fft(initial_state , qbits_num)
 
     p_initial_state = np.abs(initial_state) **2 
     p_initial_state = np.abs(initial_state) **2 / np.sum(p_initial_state)
 
     # Simulate circuit with noise
-    results = []
-    mse = []
+    _rsse = []
     _relative_entropy = []
     for p in p_noise_arr:
-        qc_with_noise = qft_circuit(qbits_num, initial_state, add_bit_flip=True, bit_flip_prob=p)
+        print(f"Initial State  = {initial_state_name} , p = {p:.3f}")
+        qc_with_noise, _= qft_circuit(qbits_num, initial_state, add_bit_flip=True, bit_flip_prob=p)
         qc_with_noise.measure_all()
         counts_with_noise = simulate_circuit(qc_with_noise, shots)
 
-        # Calculate the square root of the sum of errors squared
-        error_squared = (counts_with_noise - final_state) ** 2
-        mse.append(np.sqrt(np.sum(error_squared)))
+        _rsse.append(rsse(final_state , counts_with_noise))
         _relative_entropy.append(relative_entropy(final_state , counts_with_noise))
+
         if plot:
             plt.bar(labels , counts_with_noise)
             plt.scatter(labels, final_state, color='red')
@@ -643,62 +331,85 @@ def simulate_noise(qbits_num=5, shots=10000 , initial_state_name = "square" , pl
             plt.grid(alpha = 0.3)
             plt.xlabel("States")
             plt.ylabel("Probabilities")
-            plt.show()
-    
-    print(_relative_entropy)
+            plt.show()    
+
+    return _rsse , _relative_entropy , np.log(_relative_entropy)
+
+def plot_all_statistics(qbits_num=5, shots=10000 , err = "bit_flip"):
+    # Initialize array for bit flip probabilities
+    d_p = 0.05
+    p_noise_arr = np.arange(0, 1 + d_p, d_p)
+
+    # List of state names
+    state_names = ["zero", "gaussian", "cos", "square", "mixed"]
+
+    # Initialize dictionaries to store each type of statistic for each state
+    rsse_dict = {}
+    relative_entropy_dict = {}
+    log_relative_entropy_dict = {}
+
+    # For each state name, compute all statistics
+    for state_name in state_names:
+        if err == "bit_flip":
+            rsse, relative_entropy, log_relative_entropy = simulate_bit_flip_noise(qbits_num=qbits_num, shots=shots, initial_state_name=state_name, plot=False)
         
+        if err == "general":
+            rsse, relative_entropy, log_relative_entropy = simulate_general_noise(qbits_num=qbits_num, shots=shots, initial_state_name=state_name, plot=False)
 
+        # Store statistics in corresponding dictionary
+        rsse_dict[state_name] = rsse
+        relative_entropy_dict[state_name] = relative_entropy
+        log_relative_entropy_dict[state_name] = log_relative_entropy
+
+    # Create a dictionary to store all statistics dictionaries
+    all_stats_dict = {'RSSE': rsse_dict, 'Relative Entropy': relative_entropy_dict, 'Log Relative Entropy': log_relative_entropy_dict}
+
+    # For each type of statistic, create a separate plot
+    for stat_name, stat_dict in all_stats_dict.items():
+        plt.figure(figsize=(10, 5))
+
+        # For each state name, plot the statistic
+        for state_name, statistic in stat_dict.items():
+            plt.plot(p_noise_arr, statistic, label=f"{state_name}")
+
+        plt.title(f'{stat_name} vs Bit Flip Probability')
+        if err == "bit_flip":
+            plt.xlabel('Bit Flip Probability')
         
+        if err == "general":
+            plt.xlabel('Depolarizing Error Parameter')
 
-    # plt.figure()
-    # plt.plot(p_noise_arr , mse , label=f"{initial_state_name}")
-    # plt.grid(alpha = 0.3)
-    # plt.title(f'RSSE vs Bit Flip Probability')
-    # plt.xlabel('Bit Flip Probability')
-    # plt.ylabel('RSSE')
-
-
-    # plt.figure()
-    # plt.plot(p_noise_arr , _relative_entropy , label=f"{initial_state_name}")
-    # plt.title(f'Relative Entropy vs Bit Flip Probability')
-    # plt.xlabel('Bit Flip Probability')
-    # plt.ylabel('Relative Entropy')
-    # plt.grid(alpha = 0.3)
-
-    
-    plt.plot(p_noise_arr , np.log(_relative_entropy) , label=f"{initial_state_name}")
-    plt.title(f'Log Relative Entropy vs Bit Flip Probability')
-    plt.xlabel('Bit Flip Probability')
-    plt.ylabel('Log Relative Entropy')
-    plt.grid(alpha = 0.3)
-
+        plt.ylabel(stat_name)  # Y-label is the name of the statistic
+        plt.grid(alpha = 0.3)
+        plt.legend()
 
 def simulate_general_noise(qbits_num=5, shots=10000 , initial_state_name = "square" , plot = False):
+    n = qbits_num
     labels = [format(i, '0' + str(n) + 'b') for i in range(2**n)]
     d_p = 0.005
     p_noise_arr = np.arange(0, 0.1 + d_p, d_p)
 
     # Simulate circuit without noise
     initial_state = create_initial_state(initial_state_name, qbits_num)
-    
     final_state = custom_fft(initial_state , qbits_num)
 
     p_initial_state = np.abs(initial_state) **2 
     p_initial_state = np.abs(initial_state) **2 / np.sum(p_initial_state)
 
     # Simulate circuit with noise
-    results = []
-    mse = []
+    _rsse = []
+    _relative_entropy = []
     _relative_entropy = []
     for p in p_noise_arr:
+        print(f"Initial State  = {initial_state_name} , p = {p:.3f}")
         qc_with_noise , noise_model = qft_circuit(qbits_num, initial_state,  general_noise = True , general_noise_prob = p)
         qc_with_noise.measure_all()
         counts_with_noise = simulate_circuit(qc_with_noise, shots , noise_model = noise_model)
 
         # Calculate the square root of the sum of errors squared
-        error_squared = (counts_with_noise - final_state) ** 2
-        mse.append(np.sqrt(np.sum(error_squared)))
+        _rsse.append(rsse(final_state , counts_with_noise))
         _relative_entropy.append(relative_entropy(final_state , counts_with_noise))
+
         if plot:
             plt.bar(labels , counts_with_noise)
             plt.scatter(labels, final_state, color='red')
@@ -711,32 +422,7 @@ def simulate_general_noise(qbits_num=5, shots=10000 , initial_state_name = "squa
             plt.ylabel("Probabilities")
             plt.show()
     
-    print(_relative_entropy)
-        
-
-        
-
-    # plt.plot(p_noise_arr , mse , label=f"{initial_state_name}")
-    # plt.grid(alpha = 0.3)
-    # plt.title(f'RSSE vs Depolarizing Error Parameter')
-    # plt.xlabel('Depolarizing Error Parameter')
-    # plt.ylabel('RSSE')
-
-
-    
-    # plt.plot(p_noise_arr , _relative_entropy , label=f"{initial_state_name}")
-    # plt.title(f'Relative Entropy vs Depolarizing Error Parameter')
-    # plt.xlabel('Depolarizing Error Parameter')
-    # plt.ylabel('Relative Entropy')
-    # plt.grid(alpha = 0.3)
-
-    
-    plt.plot(p_noise_arr , np.log(_relative_entropy) , label=f"{initial_state_name}")
-    plt.title(f'Log Relative Entropy vs Depolarizing Error Parameter')
-    plt.xlabel('Depolarizing Error Parameter')
-    plt.ylabel('Log Relative Entropy')
-    plt.grid(alpha = 0.3)
-
+    return _rsse , _relative_entropy , np.log(_relative_entropy)
 
 def simulate_general_noise_for_changing_qbits(initial_state_name="square", shots=10000, plot=False):
     qbits_arr = [3, 4, 5, 6, 7, 8]
@@ -782,7 +468,6 @@ def simulate_general_noise_for_changing_qbits(initial_state_name="square", shots
     plt.ylabel("Root Sum Square Error")
     plt.legend()
     
-
 def simulate_mixed_noise_for_different_general_noise(qbits_num=5, shots=100000, initial_state_name="gaussian", plot=False):
     labels = [format(i, '0' + str(qbits_num) + 'b') for i in range(2**qbits_num)]
     d_p = 0.005
@@ -802,6 +487,7 @@ def simulate_mixed_noise_for_different_general_noise(qbits_num=5, shots=100000, 
         mse = []
 
         for p in p_noise_arr:
+            print(f"Initial State = {initial_state_name} , bit_flip = {p} , dep = {gen_noise}")
             # Simulate both general noise and bit-flip noise simultaneously
             qc_with_noise, noise_model = qft_circuit(qbits_num, initial_state, 
                                                      add_bit_flip=True, bit_flip_prob=p,
@@ -829,43 +515,14 @@ def simulate_mixed_noise_for_different_general_noise(qbits_num=5, shots=100000, 
 
     plt.show()
 
-
-def draw_qft_with_error_correction(n  , bit_flip_prob = 0.5):
-    q = QuantumRegister(n,'q')
-    encod = QuantumRegister(2 , 'e')
-    decod=  QuantumRegister(2 , 'd')
-    c = ClassicalRegister(2,'c')
-
-    qc = QuantumCircuit(q, encod , decod , c)
-    qc.cx(q[0],encod[0])
-    qc.cx(q[0],encod[1])
-
-    my_custom_gate = Gate(name=f"X(p)", num_qubits=1, params=[])
-    qc.append(my_custom_gate , [0])
-    qc.append(my_custom_gate , [n])
-    qc.append(my_custom_gate , [n+1])
+def qft_error_correction(n  , initial_state_name = None , bit_flip_prob = 0.5, general_noise = False , general_noise_prob = 0.1):
     
-    qc.cx(q[0],decod[0])
-    qc.cx(encod[0],decod[0])
-    qc.cx(q[0],decod[1])
-    qc.cx(encod[1],decod[1])
-
-    qc.measure(decod[0] , c[0])
-    qc.measure(decod[1] , c[1])
-
-    qc.x(q[0]).c_if(c, 1)
-    qc.x(encod[0]).c_if(c, 3)
-    qc.x(encod[1]).c_if(c, 2)
-    qc.draw(output='mpl' , fold = 80)
-
-
-def circuit_with_error_correction(n  , initial_state_name = None , bit_flip_prob = 0.5):
     q = QuantumRegister(n,'q')
     encod = QuantumRegister(2 , 'e')
     decod=  QuantumRegister(2 , 'd')
     c = ClassicalRegister(2,'c')
 
-    meas = ClassicalRegister(n, 'meas')
+    meas = ClassicalRegister(n, 'm')
 
     qc = QuantumCircuit(q, encod , decod , c , meas)
     qc.barrier()
@@ -886,7 +543,7 @@ def circuit_with_error_correction(n  , initial_state_name = None , bit_flip_prob
     qc.cx(q[0],encod[1])
     qc.barrier()
     my_custom_gate = pauli_error([('X', bit_flip_prob), ('I', 1 - bit_flip_prob)])
-    my_custom_gate = Gate(name=f"X(p)", num_qubits=1, params=[])
+    #my_custom_gate = Gate(name=f"BF", num_qubits=1, params=[])
 
     qc.append(my_custom_gate , [0])
     qc.append(my_custom_gate , [n])
@@ -913,105 +570,206 @@ def circuit_with_error_correction(n  , initial_state_name = None , bit_flip_prob
     qc.cx(q[0],encod[1])
 
     qc.barrier()
-    qftc = qft_circuit(n)
+    qftc , _= qft_circuit(n)
     qc.compose(qftc, inplace=True)
     qc.barrier()
+
+
+    if general_noise:
+        noise_model = NoiseModel()
+        #error_gate1 = pauli_error([('X', general_noise_prob), ('I', 1 - general_noise_prob)])
+        error_gate1 = depolarizing_error(general_noise_prob, 1)
+        noise_model.add_all_qubit_quantum_error(error_gate1, ['h'])
+
+        qc.measure(q , meas)
+
+        return qc , noise_model
+
+
     qc.measure(q , meas)
-    #qc.measure(q , c)
-    qc.draw(output='mpl' , fold = 100 , scale = 0.7)
 
-    # simulator = Aer.get_backend('qasm_simulator')
-    # job = execute(qc, simulator, shots=100000)
-    # result = job.result()
-    # counts = result.get_counts(qc)
+    return qc , None
 
-    # filtered_counts = filter_bit_histogram(counts, list(range(n+1,1,-1)))
+def compare_circuits(n, initial_state=None, bit_flip_prob=0.5, general_noise=False, general_noise_prob=0.1 , plot = False):
+    qbits_num = n
+    initial_state_name = initial_state
+    # Generate initial state if provided
+    if initial_state is not None:
+        initial_state = create_initial_state(initial_state , n)
 
-    # plot_histogram(counts)
-    # #plot_histogram(counts)
-    # plot_histogram(filtered_counts)
-
-
-def circuit_without_error_correction(n  , bit_flip_prob = 0.5):
-    q = QuantumRegister(n,'q')
-
-    qc = QuantumCircuit(q)
-
-    my_custom_gate = pauli_error([('X', bit_flip_prob), ('I', 1 - bit_flip_prob)])
-    qc.append(my_custom_gate , [0])
-
-    qc.measure_all()
+    # Create QFT circuit with error correction
+    qc_error_correction, noise_model_correction = qft_error_correction(n, initial_state, bit_flip_prob, general_noise = general_noise, general_noise_prob = general_noise_prob)
     
-    qc.draw(output='mpl')
+    # Create regular QFT circuit
+    qc_no_error_correction, noise_model_no_correction = qft_circuit(n , initial_state = initial_state , add_bit_flip = True , bit_flip_prob = bit_flip_prob , general_noise = general_noise , general_noise_prob = general_noise_prob)
+    qc_no_error_correction.measure_all()
+    # Initialize simulator
+    simulator_0 = Aer.get_backend('qasm_simulator')
+    simulator_1 = Aer.get_backend('qasm_simulator')
 
-    simulator = Aer.get_backend('qasm_simulator')
-    job = execute(qc, simulator, shots=100000)
-    result = job.result()
-    counts = result.get_counts(qc)
+    # Run the circuits
+    job_error_correction = execute(qc_error_correction, simulator_0, shots=10000, noise_model=noise_model_correction)
+    job_no_error_correction = execute(qc_no_error_correction, simulator_1, shots=10000 , noise_model=noise_model_no_correction)
 
-    plot_histogram(counts)
+    # Get the results
+    result_error_correction = job_error_correction.result()
+    result_no_error_correction = job_no_error_correction.result()
+
+    # Get the counts (how many times each possible state was measured)
+    counts_error_correction = result_error_correction.get_counts(qc_error_correction)
+    counts_no_error_correction = result_no_error_correction.get_counts(qc_no_error_correction)
+
+     # create a list of all possible output states
+    states = [format(i, '0%sb' % qbits_num) for i in range(2**qbits_num)]
+
+    for state in states:
+        if state not in counts_no_error_correction:
+            counts_no_error_correction[state] = 0  
+    
+    counts_no_error_correction = np.array([counts_no_error_correction[state] for state in states])
+    counts_no_error_correction = counts_no_error_correction / 10000
+
+
+    counts_error_correction = filter_bit_histogram(counts_error_correction, list(range(n+1,1,-1))) 
+    sorted_keys = sorted(counts_error_correction.keys(), key=lambda x: int(x, 2))
+    # Create the ordered array of values
+    counts_error_correction = np.array([counts_error_correction[key] for key in sorted_keys])
+    counts_error_correction = counts_error_correction / 10000
+
+
+    final_state = custom_fft(initial_state , n)
+    if plot:
+        plt.figure()
+        xaxis = np.arange(len(states))
+        plt.bar(xaxis - 0.2, counts_error_correction , 0.4, color = 'blue' , label = "Error Correction")
+        plt.bar(xaxis + 0.2, counts_no_error_correction ,0.4, color = 'c' , label = "No Error Correction")
+        plt.scatter(xaxis , final_state , color = 'red' , label = "Ideal")
+        plt.grid(alpha = 0.3)
+
+        plt.xticks(xaxis, states)
+        plt.xticks(rotation=90)
+        plt.title(f"Histogram Comparison, p_bit_flip = {bit_flip_prob:.2f} , Initial State: {initial_state_name}")
+
+        plt.legend()
+
+    error_squared_correction = (counts_error_correction - final_state) ** 2
+    error_squared_correction = np.sqrt(np.sum(error_squared_correction))
+
+    error_squared_no_correction = (counts_no_error_correction - final_state) ** 2
+    error_squared_no_correction = np.sqrt(np.sum(error_squared_no_correction))
+
+    _relative_entropy_correction = relative_entropy(final_state , counts_error_correction)
+    _relative_entropy_no_correction = relative_entropy(final_state , counts_no_error_correction)
+
+    return [error_squared_correction , error_squared_no_correction , _relative_entropy_correction , _relative_entropy_no_correction , np.log(_relative_entropy_correction) , np.log(_relative_entropy_no_correction)]
+
+def run_simulations(n, initial_state=None, prob_range=(0, 1, 0.1), general_noise=False, general_noise_prob=0.1):
+    bit_flip_probs = np.arange(*prob_range)
+    errors_squared_correction = []
+    errors_squared_no_correction = []
+    relative_entropies_correction = []
+    relative_entropies_no_correction = []
+    log_relative_entropies_correction = []
+    log_relative_entropies_no_correction = []
+
+    for i , bit_flip_prob in enumerate(bit_flip_probs):
+        error_correction, error_no_correction, relative_entropy_correction, relative_entropy_no_correction, log_relative_entropy_correction, log_relative_entropy_no_correction = compare_circuits(n, initial_state, bit_flip_prob, general_noise, general_noise_prob, plot = bit_flip_prob in [bit_flip_probs[2] , bit_flip_probs[6] , bit_flip_probs[10]])
+        errors_squared_correction.append(error_correction)
+        errors_squared_no_correction.append(error_no_correction)
+        relative_entropies_correction.append(relative_entropy_correction)
+        relative_entropies_no_correction.append(relative_entropy_no_correction)
+        log_relative_entropies_correction.append(log_relative_entropy_correction)
+        log_relative_entropies_no_correction.append(log_relative_entropy_no_correction)
+
+        print(bit_flip_prob)
+
+    plt.figure()
+    plt.plot(bit_flip_probs, errors_squared_correction, label='Error Correction')
+    plt.plot(bit_flip_probs, errors_squared_no_correction, label='No Error Correction')
+    plt.ylabel('RSSE')
+    plt.title('RSSE for different bit flip probabilities')
+    plt.xlabel('Bit flip probability')
+    plt.grid()
+    plt.legend()
+    plt.xticks(np.arange(0, 1.1, 0.1))
+
+    plt.figure()
+    plt.plot(bit_flip_probs, relative_entropies_correction, label='Error Correction')
+    plt.plot(bit_flip_probs, relative_entropies_no_correction, label='No Error Correction')
+    plt.ylabel('Relative Entropy')
+    plt.title('Relative Entropy for different bit flip probabilities')
+    plt.xlabel('Bit flip probability')
+    plt.grid()
+    plt.legend()
+    plt.xticks(np.arange(0, 1.1, 0.1))
+
+    plt.figure()
+    plt.plot(bit_flip_probs, log_relative_entropies_correction, label='Error Correction')
+    plt.plot(bit_flip_probs, log_relative_entropies_no_correction, label='No Error Correction')
+    plt.ylabel('Log Relative Entropy')
+    plt.title('Log Relative Entropy for different bit flip probabilities')
+
+    plt.xlabel('Bit flip probability')
+    plt.grid()
+    plt.legend()
+    plt.xticks(np.arange(0, 1.1, 0.1))
+    plt.show()
+
 
 if __name__ == "__main__":
-    n = qbits_num = 5  # Change this to the number of qubits you want
+    action_list = ["draw_circuits" , "plot_all_fft" , "qft_accuracy_simulation_animation" , "qft_simulate_bit_flip_noise" , "qft_simulate_dep_noise" , "qft_simulate_mixed_noise" , "qft_simulate_changing_qubits", "qft_error_correction"]
+    action = "qft_error_correction"
 
-    #draw all the circuits
-    #draw_circuit('qft' , qbits_num , scale = 0.7 , fold = 100)
-    #draw_circuit('iqft' , qbits_num)
-    #draw_circuit('qft_iqft' , qbits_num)
+    #draw circuit
+    if action == "draw_circuits":
+        qbits_num = 5
+        draw_circuit(qbits_num , scale = 0.7 , fold = 100)
+        plt.show()
+    
+    # draw all fft
+    if action == "plot_all_fft":
+        initial_states = ["zero" ,  "mixed" , "gaussian" , "cos" , "square"]
+        qbits_num = 5
+        plot_all_fft(qbits_num, initial_states)
+        plt.show()
 
-    # initial_states = ["zero" ,  "mixed" , "gaussian" , "cos" , "square"]
-    # plot_all_fft(qbits_num, initial_states)
+    # convergence to number of shots with animation simulation
+    if action == "qft_accuracy_simulation_animation":
+        qft_accuracy_simulation_animation(qbits_num = 5 , initial_state="gaussian" , animate = True)
+        #qft_accuracy_simulation_animation(qbits_num = 5 , initial_state="cos" , animate = True)
+    
 
-    #qft_accuracy_simulation_2(qbits_num = 5 , initial_state="gaussian" , animate = False)
-    #qft_accuracy_simulation_2(qbits_num = 5 , initial_state="cos" , animate = True)
+    if action == "qft_simulate_bit_flip_noise":
+        #simulate_bit_flip_noise(qbits_num=5, shots=10000, initial_state_name="gaussian", plot=True)
+        #simulate_bit_flip_noise(qbits_num=qbits_num, shots=10000, initial_state_name="cos", plot=True)
+        plot_all_statistics(qbits_num=5, shots=1000, err = "bit_flip")
+        plt.show()
     
-    # qft_accuracy_simulation(qbits_num = qbits_num , initial_state = "square")
-    #qft_accuracy_simulation(qbits_num = 3 , initial_state = "gaussian")
-    #qft_accuracy_simulation_multiple_initial_states(qbits_num = 3 , initial_states = ["gaussian","cos", "square"])
-    #qft_accuracy_simulation_multiple_initial_states(qbits_num = 5 , initial_states = ["gaussian","cos", "square"])
-    # qft_accuracy_simulation_multiple_initial_states(qbits_num = 8 , initial_states = ["gaussian","cos", "square"])
+    if action == "qft_simulate_dep_noise":
+        #simulate_general_noise(qbits_num=5, shots=10000 , initial_state_name = "gaussian" , plot = True)
+        #simulate_general_noise(qbits_num=5, shots=10000 , initial_state_name = "squacosre" , plot = True)
+        plot_all_statistics(qbits_num=5, shots=1000, err = "general")
+        plt.show()
     
-    #simulation
+    if action == "qft_simulate_mixed_noise":
+        #simulate_mixed_noise_for_different_general_noise(initial_state_name="zero" , shots = 1000)
+        simulate_mixed_noise_for_different_general_noise(initial_state_name="gaussian" , shots = 10000)
+        # simulate_mixed_noise_for_different_general_noise(initial_state_name="cos" , shots = 10000)
+        # simulate_mixed_noise_for_different_general_noise(initial_state_name="square" , shots = 10000)
+        # simulate_mixed_noise_for_different_general_noise(initial_state_name="zero" , shots = 10000)
+        # simulate_mixed_noise_for_different_general_noise(initial_state_name="mixed" , shots = 10000)
+        plt.show()
+
+
+    if action == "qft_simulate_changing_qubits":
+        simulate_general_noise_for_changing_qbits(initial_state_name="square", shots=100000, plot=False)
+        # simulate_general_noise_for_changing_qbits(initial_state_name="cos", shots=100000, plot=False)
+        # simulate_general_noise_for_changing_qbits(initial_state_name="zero", shots=100000, plot=False)
+        plt.show()
     
     
-    
-    
-    # plt.title(f"Root Sum Square Error Vs General Error Probability, Qubits: {qbits_num}")
-    # plt.xlabel("General Error Probability")
-    # plt.ylabel("RSSE")
+    if action == "qft_error_correction":
+        run_simulations(5, initial_state="gaussian", prob_range=(0, 1, 0.05), general_noise=False, general_noise_prob=0.1)
+        # run_simulations(n, initial_state="cos", prob_range=(0, 1, 0.05), general_noise=False, general_noise_prob=0.1)
 
     
-    # simulate_noise(qbits_num=5 , initial_state_name = "zero", plot= False)
-    # simulate_noise(qbits_num=5 , initial_state_name = "gaussian" , plot= False)
-    # simulate_noise(qbits_num=5 , initial_state_name = "cos" ,plot= False)
-    # simulate_noise(qbits_num=5 , initial_state_name = "square")
-    # simulate_noise(qbits_num=5 , initial_state_name = "mixed")
-    
-    # simulate_general_noise(qbits_num=5 , initial_state_name = "zero" , plot = False)
-    # simulate_general_noise(qbits_num=5 , initial_state_name = "gaussian" , plot = False)
-    # simulate_general_noise(qbits_num=5 , initial_state_name = "cos" , plot = False)
-    # simulate_general_noise(qbits_num=5 , initial_state_name = "square" , plot = False)
-    # simulate_general_noise(qbits_num=5 , initial_state_name = "mixed" , plot = False)
-
-    # simulate_general_noise_for_changing_qbits(initial_state_name="square", shots=100000, plot=False)
-    # simulate_general_noise_for_changing_qbits(initial_state_name="cos", shots=100000, plot=False)
-    # simulate_general_noise_for_changing_qbits(initial_state_name="zero", shots=100000, plot=False)
-    
-    
-    #@simulate_mixed_noise_for_different_general_noise(initial_state_name="zero" , shots = 1000)
-    #simulate_mixed_noise_for_different_general_noise(initial_state_name="gaussian" , shots = 10000)
-    #simulate_mixed_noise_for_different_general_noise(initial_state_name="cos" , shots = 10000)
-    # simulate_mixed_noise_for_different_general_noise(initial_state_name="square" , shots = 10000)
-    # simulate_mixed_noise_for_different_general_noise(initial_state_name="zero" , shots = 10000)
-    # simulate_mixed_noise_for_different_general_noise(initial_state_name="mixed" , shots = 10000)
-    
-    bit_flip_prob = 0.0
-    pcorrect = (1-bit_flip_prob)**3 + 3*((1-bit_flip_prob)**2)*bit_flip_prob
-    pmistake = 1- pcorrect
-    
-    # print(f"p mitake without = {bit_flip_prob} , p mistake with = {pmistake}")
-    circuit_with_error_correction(3  , initial_state_name = None , bit_flip_prob = bit_flip_prob)
-    # circuit_without_error_correction(3  , bit_flip_prob = bit_flip_prob)
-    #draw_qft_with_error_correction(5  , bit_flip_prob = 0.5)
-    #plt.legend()
-    plt.show()
